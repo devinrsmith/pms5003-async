@@ -1,12 +1,20 @@
 import aioserial
 import asyncio
 import dataclasses
+import datetime
 import json
 import struct
+import sys
 import time
 
+from contextlib import asynccontextmanager
 
-__version__ = '0.0.1.dev1'
+
+__version__ = '0.0.1.dev2'
+
+
+def _pretty_timestamp(timestamp: float) -> str:
+    return datetime.datetime.fromtimestamp(timestamp).strftime('%Y-%m-%dT%H:%M:%S.%f%zZ')
 
 
 @dataclasses.dataclass
@@ -56,13 +64,17 @@ class PMS5003Measurement:
     #: Reserved
     reserved: int
 
-    def csv(self) -> str:
+
+    def csv(self, timestamp=None) -> str:
         """Output the measurement as a CSV line"""
-        return ",".join([str(x) for x in dataclasses.astuple(self)])
-        
-    def json(self) -> str:
+        return ",".join(([_pretty_timestamp(timestamp)] if timestamp else []) + [str(x) for x in dataclasses.astuple(self)])
+
+
+    def json(self, timestamp=None) -> str:
         """Output the measurement as a JSON line"""
-        return json.dumps(dataclasses.asdict(self))
+        timestamp_dict = {"timestamp": _pretty_timestamp(timestamp)} if timestamp else {}
+        measurement_dict = dataclasses.asdict(self)
+        return json.dumps({**timestamp_dict, **measurement_dict})
 
 
 class DataError(RuntimeError):
@@ -81,40 +93,76 @@ def parse(data: bytes) -> PMS5003Measurement:
     return PMS5003Measurement(*unpacked[:-1])
 
 
-async def read_one(aioserial_instance: aioserial.AioSerial):
-    """Returns a tuple of the current timestamp and the PMS5003 measurement"""
-    data = await aioserial_instance.read_async(32)
-    timestamp = time.time()
-    return timestamp, parse(data)
+class PMS5003Serial:
+    def __init__(self, aioserial: aioserial.AioSerial) -> None:
+        self._aioserial = aioserial
 
 
-async def read(
-    aioserial_instance: aioserial.AioSerial,
-    dedupe: bool = True,
-    warmup: float = 30.0):
-    # todo: document why dedup may be important (active mode oversampling, see docs)
-    # todo: document warmup (suggested 30s warmup, see docs)
-    previous = None
-    if warmup > 0:
-        start_time = time.time()
-        warmup_time = start_time + warmup 
-        ts = start_time
-        while ts < warmup_time:
-            ts, current = await read_one(aioserial_instance)
+    async def read_one(self):
+        """Returns a tuple of the current timestamp and the PMS5003 measurement"""
+        data = await self._aioserial.read_async(32)
+        timestamp = time.time()
+        return timestamp, parse(data)
+
+
+    async def read(
+        self,
+        dedupe: bool = True,
+        warmup: float = 30.0):
+        # todo: document why dedup may be important (active mode oversampling, see docs)
+        # todo: document warmup (suggested 30s warmup, see docs)
+        previous = None
+        if warmup > 0:
+            start_time = time.time()
+            warmup_time = start_time + warmup 
+            ts = start_time
+            while ts < warmup_time:
+                ts, current = await self.read_one()
+                previous = current
+        while True:
+            ts, current = await self.read_one()
+            if dedupe and current == previous:
+                continue
             previous = current
-    while True:
-        ts, current = await read_one(aioserial_instance)
-        if dedupe and current == previous:
-            continue
-        previous = current
-        yield ts, current
+            yield ts, current
 
 
-async def print_csv(aioserial_instance: aioserial.AioSerial):
-    async for _, current in read(aioserial_instance, dedupe=True, warmup=30.0):
-        print(current.csv())
+    async def print_csv(self, file=sys.stdout):
+        async for _, current in self.read(dedupe=True, warmup=30.0):
+            print(current.csv(), file=file)
 
 
-if __name__ == "__main__":
-    aioserial_instance = aioserial.AioSerial(port='/dev/ttyAMA0', baudrate=9600)
-    asyncio.run(print_csv(aioserial_instance))
+@asynccontextmanager
+async def open_pms(port='/dev/ttyAMA0', baudrate=9600):
+    _aioserial = aioserial.AioSerial(port=port, baudrate=baudrate)
+    yield PMS5003Serial(_aioserial)
+    _aioserial.close()
+
+
+async def write_csv(port='/dev/ttyAMA0', with_header=True, with_timestamp=True, dedupe=True, warmup=30.0, file=sys.stdout):
+    async with open_pms(port=port) as pms:
+        if with_header:
+            print(f"{'timestamp,' if with_timestamp else ''}pm_1,pm_2_5,pm_10,pm_1_atmosphere,pm_2_5_atmosphere,pm_10_atmosphere,p_0_1,p_0_5,p_1_0,p_2_5,p_5_0,p_10,reserved", file=file)
+        async for timestamp, current in pms.read(dedupe=dedupe, warmup=warmup):
+            print(f"{current.csv(timestamp if with_timestamp else None)}", file=file)
+
+
+async def write_json(port='/dev/ttyAMA0', with_timestamp=True, dedupe=True, warmup=30.0, file=sys.stdout):
+    async with open_pms(port=port) as pms:
+        async for timestamp, current in pms.read(dedupe=dedupe, warmup=warmup):
+            print(f"{current.json(timestamp if with_timestamp else None)}", file=file)
+
+
+def write_csv_main():
+    # TODO: argparse CLI
+    print('Writing csv. May be short warmup delay...', file=sys.stderr)
+    asyncio.run(write_csv())
+
+
+def write_json_main():
+    # TODO: argparse CLI
+    print("Writing json. May be short warmup delay...", file=sys.stderr)
+    asyncio.run(write_json())
+
+
+# TODO: single entrypoint, single main

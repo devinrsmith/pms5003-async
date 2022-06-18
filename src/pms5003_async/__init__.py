@@ -6,7 +6,7 @@ import struct
 import time
 
 
-__version__ = '0.0.1.dev0'
+__version__ = '0.0.1.dev1'
 
 
 @dataclasses.dataclass
@@ -110,10 +110,11 @@ async def read(
         yield ts, current
 
 
-async def print(aioserial_instance: aioserial.AioSerial):
+async def print_csv(aioserial_instance: aioserial.AioSerial):
     async for _, current in read(aioserial_instance, dedupe=True, warmup=30.0):
-        print(current.json())
-    
+        print(current.csv())
 
-aioserial_instance = aioserial.AioSerial(port='/dev/ttyAMA0', baudrate=9600)
-asyncio.run(print(aioserial_instance))
+
+if __name__ == "__main__":
+    aioserial_instance = aioserial.AioSerial(port='/dev/ttyAMA0', baudrate=9600)
+    asyncio.run(print_csv(aioserial_instance))

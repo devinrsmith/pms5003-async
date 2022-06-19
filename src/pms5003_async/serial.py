@@ -37,7 +37,9 @@ class PMS5003Serial:
         expected_checksum = unpacked[13]
         if actual_checksum != expected_checksum:
             return DataError()
-        return PMS5003Measurement(*unpacked[:-1])
+        # The second to last is a "reserved" field
+        # The last is the "checksum" field.
+        return PMS5003Measurement(*unpacked[:-2])
 
 
     async def try_read_one(self) -> typing.Optional[typing.Tuple[float, PMS5003Measurement]]:

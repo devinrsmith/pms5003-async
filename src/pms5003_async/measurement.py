@@ -51,9 +51,6 @@ class PMS5003Measurement:
     #: Number of particles with diameter beyond 10 μm in 0.1 L of air
     p_10: int
 
-    #: Reserved
-    reserved: int
-
 
     def csv(self, timestamp=None) -> str:
         """Output the measurement as a CSV line"""

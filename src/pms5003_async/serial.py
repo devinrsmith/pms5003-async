@@ -26,7 +26,6 @@ class PMS5003Serial:
         for expected in PMS5003Serial._START_SEQUENCE:
             c = ord(await self._aioserial.read_async(1))
             if c != expected:
-                print(f"expected {expected}, actual {c}")
                 return False
         return True
 
